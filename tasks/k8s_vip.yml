@@ -1,0 +1,25 @@
+---
+# [ k8s_control_plane - tasks/k8s_vip.yml ]
+
+# Apply k8s-vip manifest template (keepalived)
+- name: Apply k8s-vip manifest template (keepalived)
+  stat: path="/etc/kubernetes/manifests/k8s-vip.yaml"
+  register: k8s_vip_static_pod_manifest_file
+
+- template:
+    src: "kubernetes/manifests/keepalived.yaml.j2"
+    dest: "/etc/kubernetes/manifests/k8s-vip.yaml"
+    owner: "root"
+    group: "root"
+    mode: "0600"
+  register: k8s_vip_static_pod_manifest
+
+
+# Reload k8s-vip static pod configuration
+- name: Reload k8s-vip static pod configuration
+  shell: kubectl -n kube-system delete pod k8s-vip-{{ inventory_hostname_short }}
+  changed_when: no
+  failed_when: no
+  when:
+    - k8s_vip_static_pod_manifest_file.stat.exists
+    - k8s_vip_static_pod_manifest.changed

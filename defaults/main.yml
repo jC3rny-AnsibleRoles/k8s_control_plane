@@ -1,0 +1,49 @@
+---
+# [ k8s_control_plane - defaults ]
+ansible_facts_env_user: "{{ ansible_facts.env.SUDO_USER | default(ansible_facts.env.USER) }}"
+k8s_kubernetes_local_kube_config_path: "./tmp/{{ ansible_facts_env_user }}-{{ k8s_kubernetes_cluster_name }}.conf"
+
+# K8S
+k8s_kubernetes_version: ""
+  # Kubernetes latest version `curl -sLk https://dl.k8s.io/release/stable-1.txt`.
+  # Example value: "v1.21.14"
+k8s_kubernetes_cluster_name: ""
+k8s_kubernetes_cluster_domain: "cluster.local"
+k8s_kubernetes_endpoint_fqdn: ""
+k8s_kubernetes_endpoint_port: 6443
+k8s_kubernetes_endpoint_vip: ""
+k8s_kubernetes_pod_subnet: "192.168.0.0/17"
+k8s_kubernetes_service_subnet: "192.168.128.0/17"
+
+k8s_kubernetes_admission_plugins:
+  - NodeRestriction
+  - DefaultStorageClass
+  - MutatingAdmissionWebhook
+  - ValidatingAdmissionWebhook
+
+k8s_kubernetes_node_labels: []
+  # - { name: node-role.kubernetes.io/master, value: "" }
+k8s_kubernetes_node_taints: []
+  # - { name: node-role.kubernetes.io/master, value: "", effect: "NoSchedule" }
+
+
+# kubeadm
+k8s_kubeadm_initConfiguration_nodeRegistration_kubeletExtraArgs: ""
+k8s_kubeadm_initConfiguration_nodeRegistration_no_taints: no
+
+
+# Kustomize
+k8s_kustomize_image: "k8s.gcr.io/kustomize/kustomize"
+k8s_kustomize_tag: ""
+
+
+# CNI
+k8s_cni_plugin: "flannel"
+  # values: flannel, calico
+
+k8s_cni_flannel_version: ""
+k8s_cni_flannel_backend: "vxlan"
+
+k8s_cni_calico_version: ""
+k8s_cni_calico_backend: "bird"
+  # values: bird, vxlan

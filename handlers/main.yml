@@ -1,0 +1,16 @@
+---
+# [ k8s_control_plane - handlers ]
+- name: Reload firewalld service
+  systemd:
+    name: firewalld
+    enabled: yes
+    masked: no
+    state: reloaded
+
+- name: Reload kubelet service
+  systemd:
+    name: kubelet
+    enabled: yes
+    masked: no
+    state: restarted
+    daemon_reload: yes

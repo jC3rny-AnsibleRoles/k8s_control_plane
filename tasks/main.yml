@@ -1,0 +1,203 @@
+---
+# [ k8s_control_plane - tasks ]
+
+# Check mandatory variables
+- name: Check mandatory variables
+  assert:
+    that:
+      - k8s_kubernetes_cluster_name != ""
+      - k8s_kubernetes_endpoint_fqdn != ""
+      - k8s_kubernetes_endpoint_port is defined
+      - k8s_kubernetes_endpoint_vip != ""
+      - lookup('dig', k8s_kubernetes_endpoint_fqdn) == k8s_kubernetes_endpoint_vip.split('/')[0]
+      - k8s_kubernetes_pod_subnet != ""
+      - k8s_kubernetes_service_subnet != ""
+    quiet: true
+    msg: "Mandatory variables have to be defined!"
+  run_once: yes
+  tags: [ always ]
+
+
+# Check Kubernetes directories
+- name: Check Kubernetes manifests directory
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0700
+  with_items: [ "/etc/kubernetes", "/etc/kubernetes/manifests" ]
+  tags: [ k8s_control_plane, set-k8s_kubeadm_init_prereq ]
+
+
+# Set K8S endpoint VIP manifest
+- name: Set K8S endpoint VIP manifest
+  include_tasks:
+    file: "roles/{{ role_name }}/tasks/k8s_vip.yml"
+    apply:
+      tags: always
+  when: k8s_kubernetes_endpoint_vip != ""
+  tags: [ k8s_control_plane, set-k8s_kubeadm_init_prereq, apply-k8s_endpoint_vip_template ]
+
+
+# Apply kubeadm config template
+- name: Apply kubeadm config template
+  template:
+    src: kubeadm-init_config.yaml.j2
+    dest: $HOME/kubeadm-init_config.yaml
+    force: no
+  when: ansible_play_hosts[0] == inventory_hostname
+  tags: [ k8s_control_plane, set-k8s_kubeadm_init_prereq, apply-k8s_kubeadm_init_config_template ]
+
+
+# Check if node is member of the cluster
+- name: Check if node is member of the cluster
+  include_tasks:
+    file: roles/k8s_generic_node/tasks/k8s_cluster_membership.yml
+  tags: [ k8s_control_plane, run-k8s_kubeadm_init, check-k8s_node_membership ]
+
+
+# Run Kubernetes cluster initialization
+- block:
+  - name: Run Kubernetes cluster initialization
+    shell: "kubeadm init --config $HOME/kubeadm-init_config.yaml --upload-certs --v=5"
+    failed_when: no
+    register: k8s_kubeadm_cluster_init
+  
+  - copy:
+      dest: "{{ item }}/kubeadm-init_log_{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}.log"
+      content: "{{ k8s_kubeadm_cluster_init.stdout }}"
+      mode: 0644
+    with_items: [ "/root", "/var/log" ]
+  
+  - debug: msg="Kubernetes cluster initialization failed!"
+    failed_when: yes
+    when: k8s_kubeadm_cluster_init.rc != 0
+
+  when:
+    - ansible_play_hosts[0] == inventory_hostname
+    - k8s_node_is_member_of_cluster.rc != 0
+    - k8s_node_is_member_of_cluster.stdout == ""
+  tags: [ k8s_control_plane, run-k8s_kubeadm_init ]
+
+
+# Get kubeadm join command
+- name: Create kubeadm join command
+  include_tasks:
+    file: roles/k8s_generic_node/tasks/k8s_join_command.yml
+    apply:
+      delegate_to: "{{ inventory_hostname }}"
+      tags: always
+  when: ansible_play_hosts[0] == inventory_hostname
+  tags: [ k8s_control_plane, run-k8s_kubeadm_init, create-k8s_kubeadm_join_command ]
+
+
+# Join node to the existing Kubernetes cluster as a control-plane
+- block:
+  - name: Join node to the existing Kubernetes cluster as a control-plane
+    shell: "{{ hostvars[ansible_play_hosts[0]].k8s_kubernetes.control_plane_join_command }} --ignore-preflight-errors 'DirAvailable--etc-kubernetes-manifests' --v=5"
+    failed_when: no
+    register: k8s_kubeadm_cluster_join
+  
+  - copy:
+      dest: "{{ item }}/kubeadm-join_log_{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}.log"
+      content: "{{ k8s_kubeadm_cluster_join.stdout }}"
+      mode: 0644
+    with_items: [ "/root", "/var/log" ]
+  
+  - debug: msg="Joining node to the existing Kubernetes cluster failed!"
+    failed_when: yes
+    when: k8s_kubeadm_cluster_join.rc != 0
+
+  when:
+    - ansible_play_hosts[0] != inventory_hostname
+    - hostvars[ansible_play_hosts[0]].k8s_kubernetes.control_plane_join_command is defined
+    - k8s_node_is_member_of_cluster.rc != 0
+    - k8s_node_is_member_of_cluster.stdout == ""
+  tags: [ k8s_control_plane, run-k8s_kubeadm_init ]
+
+
+# Check local etcd static Pod arguments
+- block:
+  - name: Check local etcd static Pod initial-cluster-state argument
+    lineinfile:
+      path: /etc/kubernetes/manifests/etcd.yaml
+      insertafter: "--initial-cluster="
+      line: '    - --initial-cluster-state=existing'
+    register: k8s_etcd_args_initial_cluster_state
+  
+  - name: Check local etcd static Pod initial-cluster argument
+    lineinfile:
+      path: /etc/kubernetes/manifests/etcd.yaml
+      backrefs: yes
+      regexp: "^(.*--initial-cluster=).*$"
+      line: '\1{{ hostvars[inventory_hostname].inventory_hostname_short }}=https://{{ hostvars[inventory_hostname].ansible_default_ipv4.address }}:2380{% for host in (ansible_play_hosts | difference(inventory_hostname)) %},{{ hostvars[host].inventory_hostname_short }}=https://{{ hostvars[host].ansible_default_ipv4.address }}:2380{% endfor %}'
+    register: k8s_etcd_args_initial_cluster
+    
+  tags: [ k8s_control_plane, update-k8s_etcd_manifest ]
+
+
+# Apply etcdctl config
+- block:
+  - name: Apply etcdctl templates
+    template:
+      src: kubernetes/etcdctl-config.j2
+      dest: /etc/kubernetes/etcdctl-config
+      backup: no
+      force: yes
+      owner: root
+      group: root
+      mode: 0600
+  
+  tags: [ k8s_control_plane, apply-k8s_etcdctl_templates ]
+
+
+# Set CNI plugin
+- name: Set K8S CNI plugin
+  include_tasks:
+    file: "roles/{{ role_name }}/tasks/k8s_cni.yml"
+  when: ansible_play_hosts[0] == inventory_hostname
+  tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin ]
+
+
+# Set up cluster admin
+- name: Set up cluster admin {{ ansible_facts_env_user }}
+  include_tasks:
+    file: roles/{{ role_name }}/tasks/k8s_cluster_admin.yml
+  when: ansible_play_hosts[0] == inventory_hostname
+  tags: [ k8s_control_plane, set-k8s_kubernetes_cluster_admin, fetch-k8s_kube_config ]
+
+
+# Set labels and taints
+- name: Set labels and taints
+  include_tasks:
+    file: roles/k8s_generic_node/tasks/k8s_labels_and_taints.yml
+  when: k8s_kubernetes_node_labels != [] or k8s_kubernetes_node_taints != []
+  tags: [ set-k8s_node_labels, remove-k8s_node_labels, set-k8s_node_taints, remove-k8s_node_taints ]
+
+
+# Reset kubernetes cluster
+- name: Reset Kubernetes cluster
+  include_tasks:
+    file: "roles/{{ role_name }}/tasks/k8s_reset.yml"
+    apply:
+      tags: [ always ]
+  tags: [ never, run-k8s_kubeadm_reset ]
+
+
+# Notify handlers
+- name: Notify handler - Reload kubelet service
+  debug: msg="Notify handler"
+  notify: Reload kubelet service
+  changed_when: true
+  tags: [ never, notify-handlers_reload_kubelet_service, notify-handlers_role_k8s_control_plane, notify-handlers_all ]
+
+- meta: flush_handlers
+
+
+# End of play
+- name: Stop ansible playbook
+  debug:
+    msg: "Custom end of play"
+  failed_when: true
+  tags: [ never, end-play ]

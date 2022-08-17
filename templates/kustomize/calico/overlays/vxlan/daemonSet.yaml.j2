@@ -1,0 +1,31 @@
+---
+
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: calico-node
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: calico-node
+          env:
+            - name: CLUSTER_TYPE
+              value: "k8s"
+            - name: CALICO_IPV4POOL_IPIP
+              value: "Never"
+            - name: CALICO_IPV4POOL_VXLAN
+              value: "Always"
+            - name: CALICO_IPV4POOL_CIDR
+              value: "{{ k8s_kubernetes_pod_subnet }}"
+          livenessProbe:
+            exec:
+              command:
+              - /bin/calico-node
+              - -felix-live
+          readinessProbe:
+            exec:
+              command:
+              - /bin/calico-node
+              - -felix-ready

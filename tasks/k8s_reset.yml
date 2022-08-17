@@ -1,0 +1,19 @@
+---
+# [ k8s_control_plane - tasks/k8s_reset.yml ]
+
+# Reset kubernetes cluster
+# - name: Reset Kubernetes cluster
+#   become: yes
+#   changed_when: no
+#   shell: "{{ item }}"
+#   with_items:
+#     - "kubeadm reset -f"
+#     - "rm -rf /etc/cni/net.d/* /etc/kubernetes/*"
+#     - "rm -f  $HOME/kubeadm-init_config.yaml"
+#     - "rm -f  /tmp/crictl.*.log.{INFO,WARNING,ERROR}.*"
+#     - "rm -rf /var/lib/cni/* /var/lib/etcd/* /var/lib/kubelet/* /var/lib/weave"
+#     - "rm -f  /opt/cni/bin/weave-*"
+#     - "rm -rf /var/run/kubernetes/*"
+#     - "rm -rf /var/log/containers/* /var/log/pods/*"
+#     - "systemctl restart containerd.service"
+#     - "systemctl restart network.service"

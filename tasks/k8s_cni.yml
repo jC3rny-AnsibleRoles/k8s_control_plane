@@ -1,0 +1,185 @@
+---
+# [ k8s_control_plane - tasks/k8s_cni.yml ]
+
+# Set the Kustomize layering subsystem
+- block:
+  - name: Set the Kustomize layering subsystem
+    uri:
+      url: https://k8s.gcr.io/v2/kustomize/kustomize/tags/list
+      method: GET
+      return_content: yes
+      status_code: 200
+    register: k8s_kustomize_tags
+    when: k8s_kustomize_tag == ""
+
+  - set_fact:
+      k8s_kustomize_tag: "{{ k8s_kustomize_tags.json.tags | last }}"
+    when: k8s_kustomize_tag == ""
+  
+  - shell: "ctr images pull {{ k8s_kustomize_image }}:{{ k8s_kustomize_tag }}"
+    changed_when: no
+  
+  - file:
+      path: "${HOME}/kustomize/{{ item }}"
+      state: directory
+      recurse: yes
+    with_items:
+      - "calico/base"
+      - "calico/overlays/bgp"
+      - "calico/overlays/vxlan"
+      - "flannel/base"
+      - "flannel/overlays/vxlan"
+  
+  tags: [ k8s_control_plane, set-k8s_kustomize_subsystem ]
+
+
+# Install the Flannel CNI plugin
+- block:
+  - name: Get Flannel latest version
+    shell: curl -sSL https://github.com/flannel-io/flannel/releases/latest | grep -o 'href="/flannel-io/flannel/releases/tag/.*" ' | awk -F '/' '{ print substr($NF, 1, length($NF)-2) }'
+    register: k8s_cni_flannel_latest_version
+    changed_when: no
+    when: k8s_cni_flannel_version == ""
+
+  - set_fact:
+      k8s_cni_flannel_version: "{{ k8s_cni_flannel_latest_version.stdout }}"
+    when: k8s_cni_flannel_version == ""
+
+  # Check Flannel manifest
+  - name: Check Flannel manifest
+    stat: path="${HOME}/kustomize/flannel/base/kube-flannel.yml"
+    register: k8s_cni_flannel_manifest
+
+  # Download Flannel manifest
+  - name: Download Flannel manifest
+    unarchive:
+      src: "https://github.com/flannel-io/flannel/archive/refs/tags/{{ k8s_cni_flannel_version }}.tar.gz"
+      dest: "${HOME}/kustomize/flannel/base"
+      include: "flannel-{{ k8s_cni_flannel_version | regex_replace('^v', '') }}/Documentation/kube-flannel.yml"
+      extra_opts: "--strip-components=2"
+      remote_src: yes
+    when: not k8s_cni_flannel_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
+  
+  # Kustomize the Flannel deployment (VXLAN)
+  - block:
+    - name: Kustomize the Flannel deployment (VXLAN)
+      template:
+        src: "kustomize/flannel/{{ item.src }}"
+        dest: "${HOME}/kustomize/flannel/{{ item.dest }}"
+      with_items:
+        - { src: "base/kustomization.yaml.j2", dest: "base/kustomization.yaml" }
+        - { src: "overlays/vxlan/configMap.yaml.j2", dest: "overlays/vxlan/configMap.yaml" }
+        - { src: "overlays/vxlan/kustomization.yaml.j2", dest: "overlays/vxlan/kustomization.yaml" }
+    
+    - shell: |
+        ctr run \
+          --rm \
+          --mount type=bind,src=${HOME}/kustomize/flannel,dst=/data,options=rbind:rw \
+          "{{ k8s_kustomize_image }}:{{ k8s_kustomize_tag }}" kustomize \
+          ./kustomize build /data/overlays/vxlan -o /data/kube-flannel_{{ k8s_cni_flannel_version }}.yml
+      changed_when: no
+    
+    # Apply Flannel manifest
+    - name: Apply Flannel manifest
+      shell: "kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f ${HOME}/kustomize/flannel/kube-flannel_{{ k8s_cni_flannel_version }}.yml"
+      changed_when: no
+
+    when:
+      - k8s_cni_flannel_backend == "vxlan"
+      - not k8s_cni_flannel_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
+    
+  when: k8s_cni_plugin == "flannel"
+  tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin ]
+
+
+# Install the Calico CNI plugin
+- block:
+  - name: Get Calico latest version
+    shell: git ls-remote --refs --sort='version:refname' --tags https://github.com/projectcalico/calico.git | grep -Ev '\.dev' | awk -F '/' 'END { split($3, a, "."); print a[1]"."a[2] }'
+    register: k8s_cni_calico_latest_version
+    delegate_to: localhost
+    changed_when: no
+    when: k8s_cni_calico_version == ""
+
+  - set_fact:
+      k8s_cni_calico_version: "{{ k8s_cni_calico_latest_version.stdout }}"
+    when: k8s_cni_calico_version == ""
+
+  # Check Calico manifest
+  - name: Check Calico manifest
+    stat: path="${HOME}/kustomize/calico/base/calico.yaml"
+    register: k8s_cni_calico_manifest
+
+  # Download Calico manifest
+  - name: Download the Calico manifest
+    get_url:
+      url: "https://projectcalico.docs.tigera.io/archive/{{ k8s_cni_calico_version }}/manifests/calico.yaml"
+      dest: "${HOME}/kustomize/calico/base/calico.yaml"
+      validate_certs: no
+    when: not k8s_cni_calico_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
+  
+  # Kustomize the Calico deployment (BGP)
+  - block:
+    - name: Kustomize the Calico deployment (BGP)
+      template:
+        src: "kustomize/calico/{{ item.src }}"
+        dest: "${HOME}/kustomize/calico/{{ item.dest }}"
+      with_items:
+        - { src: "base/kustomization.yaml.j2", dest: "base/kustomization.yaml" }
+        - { src: "overlays/bgp/daemonSet.yaml.j2", dest: "overlays/bgp/daemonSet.yaml" }
+        - { src: "overlays/bgp/kustomization.yaml.j2", dest: "overlays/bgp/kustomization.yaml" }
+
+    - shell: |
+        ctr run \
+          --rm \
+          --mount type=bind,src=${HOME}/kustomize/calico,dst=/data,options=rbind:rw \
+          "{{ k8s_kustomize_image }}:{{ k8s_kustomize_tag }}" kustomize \
+          ./kustomize build /data/overlays/bgp -o /data/calico-{{ k8s_cni_calico_backend }}_{{ k8s_cni_calico_version }}.yaml
+      changed_when: no
+    
+    when:
+      - k8s_cni_calico_backend == "bird"
+      - not k8s_cni_calico_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
+
+  # Kustomize the Calico deployment (VXLAN)
+  - block:
+    - name: Kustomize the Calico deployment (VXLAN)
+      template:
+        src: "kustomize/calico/{{ item.src }}"
+        dest: "${HOME}/kustomize/calico/{{ item.dest }}"
+      with_items:
+        - { src: "base/kustomization.yaml.j2", dest: "base/kustomization.yaml" }
+        - { src: "overlays/vxlan/configMap.yaml.j2", dest: "overlays/vxlan/configMap.yaml" }
+        - { src: "overlays/vxlan/daemonSet.yaml.j2", dest: "overlays/vxlan/daemonSet.yaml" }
+        - { src: "overlays/vxlan/kustomization.yaml.j2", dest: "overlays/vxlan/kustomization.yaml" }
+    
+    - shell: |
+        ctr run \
+          --rm \
+          --mount type=bind,src=${HOME}/kustomize/calico,dst=/data,options=rbind:rw \
+          "{{ k8s_kustomize_image }}:{{ k8s_kustomize_tag }}" kustomize \
+          ./kustomize build /data/overlays/vxlan -o /data/calico-{{ k8s_cni_calico_backend }}_{{ k8s_cni_calico_version }}.yaml
+      changed_when: no
+
+    when:
+      - k8s_cni_calico_backend == "vxlan"
+      - not k8s_cni_calico_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
+  
+  # Apply Calico manifest
+  - name: Apply Calico manifest
+    shell: "kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f ${HOME}/kustomize/calico/calico-{{ k8s_cni_calico_backend }}_{{ k8s_cni_calico_version }}.yaml"
+    changed_when: no
+    when: not k8s_cni_calico_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
+
+  # Wait for the Calico kube-controllers pod
+  - name: Wait for the Calico kube-controllers pod
+    shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get pod -A -l k8s-app=calico-kube-controllers -o jsonpath='{ .items[].status.containerStatuses[].ready }' 2> /dev/null
+    changed_when: no
+    failed_when: no
+    register: k8s_cni_calico_kube_controllers_pod_status
+    delay: 30
+    retries: 10
+    until: k8s_cni_calico_kube_controllers_pod_status.stdout == "true"
+
+  when: k8s_cni_plugin == "calico"
+  tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin ]

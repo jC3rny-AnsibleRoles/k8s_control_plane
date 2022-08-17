@@ -1,0 +1,59 @@
+---
+# [ k8s_control_plane - tasks/k8s_cluster_admin.yml ]
+
+# Apply cluster admin manifest template
+- block:
+  - name: Apply cluster admin manifest template
+    template:
+      src: kubernetes/service-account/cluster-admin.yaml.j2
+      dest: "$HOME/sa_{{ ansible_facts_env_user }}.yaml"
+      force: no
+    register: k8s_kubernets_cluster_admin_manifest
+
+  - shell: "kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f {{ k8s_kubernets_cluster_admin_manifest.dest }}"
+    changed_when: no
+
+  - slurp:
+      path: "/etc/kubernetes/admin.conf"
+    register: k8s_kubernetes_admin_config_raw
+
+  - shell: "kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system get secrets $(kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system get sa {{ ansible_facts_env_user }} -o jsonpath='{ .secrets[].name }') -o jsonpath='{ .data.token }' | base64 --decode"
+    register: k8s_kubernetes_admin_config_user_token
+    changed_when: no
+
+  - set_fact:
+      k8s_kubernetes_admin_config: "{{ hostvars[ansible_play_hosts[0]].k8s_kubernetes_admin_config_raw.content | b64decode | from_yaml }}"
+      k8s_kubernetes_user_token: "{{ hostvars[ansible_play_hosts[0]].k8s_kubernetes_admin_config_user_token.stdout }}"
+
+  tags: [ k8s_control_plane, set-k8s_kubernetes_cluster_admin ]
+
+
+  # Apply kubeconfig template
+- block:
+  - name: Apply kubeconfig template
+    file:
+      path: "/home/{{ ansible_facts_env_user }}/.kube"
+      state: directory
+      owner: "{{ ansible_facts_env_user }}"
+      group: "{{ ansible_facts_env_user }}"
+      mode: 0700
+
+  - template:
+      src: "kubernetes/kubeconfig.j2"
+      dest: "/home/{{ ansible_facts_env_user }}/.kube/config"
+      force: yes
+      owner: "{{ ansible_facts_env_user }}"
+      group: "{{ ansible_facts_env_user }}"
+      mode: 0600
+  
+  tags: [ k8s_control_plane, set-k8s_kubernetes_cluster_admin ]
+
+
+# Fetch kubeconfig
+- name: Fetch kubeconfig
+  fetch:
+    src: "/home/{{ ansible_facts_env_user }}/.kube/config"
+    dest: "./tmp/{{ ansible_facts_env_user }}-{{ k8s_kubernetes_cluster_name }}.conf"
+    flat: yes
+  changed_when: no
+  tags: [ k8s_control_plane, set-k8s_kubernetes_cluster_admin, fetch-k8s_kube_config ]

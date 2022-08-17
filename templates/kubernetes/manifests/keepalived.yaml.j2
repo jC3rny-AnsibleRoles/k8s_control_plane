@@ -1,0 +1,38 @@
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "k8s-vip"
+  namespace: kube-system
+  labels:
+    k8s-app: k8s-vip
+spec:
+  hostNetwork: true
+  containers:
+    - name: keepalived
+      image: docker.io/osixia/keepalived:stable
+      env:
+        - name: KEEPALIVED_STATE
+          value: "{{ (ansible_play_hosts.index(inventory_hostname) == 0) | ternary('MASTER','BACKUP') }}"
+        - name: KEEPALIVED_PASSWORD
+          value: "{{ (k8s_kubernetes_pod_subnet | checksum)[:8] }}"
+        - name: KEEPALIVED_ROUTER_ID
+          value: "{{ (k8s_kubernetes_service_subnet.split('.')[2] | int * 1.25) | int }}"
+        - name: KEEPALIVED_PRIORITY
+          value: "{{ (ansible_play_hosts | length - ansible_play_hosts.index(inventory_hostname)) * ((k8s_kubernetes_service_subnet.split('.')[2] | int * 1.25) | int) // (ansible_play_hosts | length) }}"
+        - name: KEEPALIVED_UNICAST_PEERS
+          value: "#PYTHON2BASH:['{% for host in (ansible_play_hosts | difference(inventory_hostname)) %}
+{{ hostvars[host].ansible_default_ipv4.address }}
+{%- if not loop.last %}','{% endif %}
+{% endfor %}']"
+        - name: KEEPALIVED_VIRTUAL_IPS
+          value: "{{ k8s_kubernetes_endpoint_vip }}"
+        - name: KEEPALIVED_INTERFACE
+          value: "{{ ansible_default_ipv4.interface }}"
+      securityContext:
+        capabilities:
+          add:
+            - NET_ADMIN
+            - NET_BROADCAST
+            - NET_RAW
