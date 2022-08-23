@@ -115,7 +115,6 @@
     get_url:
       url: "https://projectcalico.docs.tigera.io/archive/{{ k8s_cni_calico_version }}/manifests/calico.yaml"
       dest: "${HOME}/kustomize/calico/base/calico.yaml"
-      validate_certs: no
     when: not k8s_cni_calico_manifest.stat.exists or 'upgrade-k8s_cni_plugin' in ansible_run_tags
   
   # Kustomize the Calico deployment (BGP)

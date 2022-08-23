@@ -73,6 +73,10 @@
   - debug: msg="Kubernetes cluster initialization failed!"
     failed_when: yes
     when: k8s_kubeadm_cluster_init.rc != 0
+  
+  - name: Waiting for the initial cluster configuration
+    shell: "sleep 90"
+    changed_when: no
 
   when:
     - ansible_play_hosts[0] == inventory_hostname
@@ -134,6 +138,11 @@
       line: '\1{{ hostvars[inventory_hostname].inventory_hostname_short }}=https://{{ hostvars[inventory_hostname].ansible_default_ipv4.address }}:2380{% for host in (ansible_play_hosts | difference(inventory_hostname)) %},{{ hostvars[host].inventory_hostname_short }}=https://{{ hostvars[host].ansible_default_ipv4.address }}:2380{% endfor %}'
     register: k8s_etcd_args_initial_cluster
     
+  - name: Wait for local etcd static Pod reconfiguration
+    shell: "sleep 30"
+    changed_when: no
+    when: k8s_etcd_args_initial_cluster_state.changed or k8s_etcd_args_initial_cluster.changed
+
   tags: [ k8s_control_plane, update-k8s_etcd_manifest ]
 
 
@@ -168,6 +177,17 @@
   tags: [ k8s_control_plane, set-k8s_kubernetes_cluster_admin, fetch-k8s_kube_config ]
 
 
+# Patch CoreDNS deployment
+- name: Patch CoreDNS deployment
+  shell: "kubectl --kubeconfig {{ k8s_kubernetes_local_kube_config_path }} -n kube-system patch deploy coredns --patch-file roles/{{ role_name }}/files/kubernetes/coredns/patch-deployment_affinity.yaml"
+  changed_when: no
+  failed_when: no
+  become: no
+  delegate_to: localhost
+  when: ansible_play_hosts[-1] == inventory_hostname
+  tags: [ k8s_control_plane, patch-k8s_coredns_deployment ]
+
+
 # Set labels and taints
 - name: Set labels and taints
   include_tasks:
@@ -193,11 +213,3 @@
   tags: [ never, notify-handlers_reload_kubelet_service, notify-handlers_role_k8s_control_plane, notify-handlers_all ]
 
 - meta: flush_handlers
-
-
-# End of play
-- name: Stop ansible playbook
-  debug:
-    msg: "Custom end of play"
-  failed_when: true
-  tags: [ never, end-play ]
