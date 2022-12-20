@@ -166,7 +166,7 @@
   include_tasks:
     file: "roles/{{ role_name }}/tasks/k8s_cni.yml"
   when: ansible_play_hosts[0] == inventory_hostname
-  tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin ]
+  tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin, create-k8s_cni_plugin_deployment ]
 
 
 # Set up cluster admin

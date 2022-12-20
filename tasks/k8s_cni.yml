@@ -182,3 +182,61 @@
 
   when: k8s_cni_plugin == "calico"
   tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin ]
+
+
+# Create K8S cni plugin deployment
+- block:
+  - name: Create K8S cni plugin deployment
+    file:
+      path: "./_kustomize/cni/{{ item }}"
+      state: directory
+      recurse: yes
+    become: no
+    delegate_to: localhost
+    with_items:
+      - "base/{{ k8s_cni_plugin }}/resources"
+      - "overlays/default"
+  
+  # Fetch Calico manifest
+  - block:
+    - name: Fetch Calico manifest
+      copy:
+        dest: "./_kustomize/cni/base/{{ k8s_cni_plugin }}/kustomization.yaml"
+        content: |
+          ---
+
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+
+          resources:
+            - ./resources/{{ k8s_cni_calico_backend }}_{{ k8s_cni_calico_version }}.yaml
+          
+      become: no
+      delegate_to: localhost
+    
+    - fetch:
+        src: "${HOME}/kustomize/calico/calico-{{ k8s_cni_calico_backend }}_{{ k8s_cni_calico_version }}.yaml"
+        dest: "./_kustomize/cni/base/{{ k8s_cni_plugin }}/resources/{{ k8s_cni_calico_backend }}_{{ k8s_cni_calico_version }}.yaml"
+        flat: yes
+      changed_when: no
+    
+    when: k8s_cni_plugin == "calico"
+
+  # Set default overlay
+  - name: Set default overlay
+    copy:
+      dest: "./_kustomize/cni/overlays/default/kustomization.yaml"
+      content: |
+        ---
+
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+
+        resources:
+          - ../../base/{{ k8s_cni_plugin }}
+        
+    become: no
+    delegate_to: localhost
+
+
+  tags: [ k8s_control_plane, install-k8s_cni_plugin, upgrade-k8s_cni_plugin, create-k8s_cni_plugin_deployment ]
