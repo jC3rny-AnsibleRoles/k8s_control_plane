@@ -1,4 +1,5 @@
 ---
+# cdis000phavs160/roles/k8s_control_plane/tasks/main.yml
 # [ k8s_control_plane - tasks ]
 
 # Check mandatory variables
@@ -137,11 +138,19 @@
       regexp: "^(.*--initial-cluster=).*$"
       line: '\1{{ hostvars[inventory_hostname].inventory_hostname_short }}=https://{{ hostvars[inventory_hostname].ansible_default_ipv4.address }}:2380{% for host in (ansible_play_hosts | difference(inventory_hostname)) %},{{ hostvars[host].inventory_hostname_short }}=https://{{ hostvars[host].ansible_default_ipv4.address }}:2380{% endfor %}'
     register: k8s_etcd_args_initial_cluster
+  
+  - name: Check local etcd static Pod listen-metrics-urls argument
+    lineinfile:
+      path: /etc/kubernetes/manifests/etcd.yaml
+      backrefs: yes
+      regexp: "^(.*--listen-metrics-urls)=http://127.0.0.1:2381$"
+      line: '\1=http://0.0.0.0:2381'
+    register: k8s_etcd_args_listen_metrics_urls
     
   - name: Wait for local etcd static Pod reconfiguration
     shell: "sleep 30"
     changed_when: no
-    when: k8s_etcd_args_initial_cluster_state.changed or k8s_etcd_args_initial_cluster.changed
+    when: k8s_etcd_args_initial_cluster_state.changed or k8s_etcd_args_initial_cluster.changed or k8s_etcd_args_listen_metrics_urls.changed
 
   tags: [ k8s_control_plane, update-k8s_etcd_manifest ]
 
@@ -159,6 +168,42 @@
       mode: 0600
   
   tags: [ k8s_control_plane, apply-k8s_etcdctl_templates ]
+
+
+# Check local kube-controller-manager static Pod arguments
+- block:
+  - name: Check local kube-controller-manager static Pod arguments
+    lineinfile:
+      path: /etc/kubernetes/manifests/kube-controller-manager.yaml
+      backrefs: yes
+      regexp: "^(.*--bind-address)=127.0.0.1$"
+      line: '\1=0.0.0.0'
+    register: k8s_kube_controller_manager_args_bind_address
+    
+  - name: Wait for local kube-controller-manager static Pod reconfiguration
+    shell: "sleep 30"
+    changed_when: no
+    when: k8s_kube_controller_manager_args_bind_address.changed
+
+  tags: [ k8s_control_plane, update-k8s_kube_controller_manager_manifest ]
+
+
+# Check local kube-scheduler static Pod arguments
+- block:
+  - name: Check local kube-scheduler static Pod arguments
+    lineinfile:
+      path: /etc/kubernetes/manifests/kube-scheduler.yaml
+      backrefs: yes
+      regexp: "^(.*--bind-address)=127.0.0.1$"
+      line: '\1=0.0.0.0'
+    register: k8s_kube_scheduler_args_bind_address
+    
+  - name: Wait for local kube-controller-manager static Pod reconfiguration
+    shell: "sleep 30"
+    changed_when: no
+    when: k8s_kube_scheduler_args_bind_address.changed
+
+  tags: [ k8s_control_plane, update-k8s_kube_scheduler_manifest ]
 
 
 # Set CNI plugin
