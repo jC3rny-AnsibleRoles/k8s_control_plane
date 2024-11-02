@@ -122,6 +122,15 @@
   tags: [ k8s_control_plane, run-k8s_kubeadm_init ]
 
 
+# Upgrade Kubernetes control-plane
+- name: "Upgrade Kubernetes control-plane to {{ k8s_kubernetes_version }}"
+  include_tasks:
+    file: "roles/{{ role_name }}/tasks/k8s_upgrade.yml"
+    apply:
+      tags: always
+  tags: [ never, upgrade-k8s_control_plane ]
+
+
 # Check local etcd static Pod arguments
 - block:
   - name: Check local etcd static Pod initial-cluster-state argument
